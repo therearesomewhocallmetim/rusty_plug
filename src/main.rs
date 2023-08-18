@@ -1,8 +1,8 @@
 use rand::Rng;
 use std::cell::Cell;
 use std::collections::HashMap;
+use std::error::Error;
 use std::fmt::Display;
-use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 trait Device: Display {
@@ -15,15 +15,10 @@ struct Socket {
     voltage: Cell<f64>,
 }
 
-struct Thermometer {
-    name: String,
-    temperature: Cell<f64>,
-}
-
 impl Display for Socket {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_fmt(format_args!(
-            "SOCKET:\n    name: {}\n    voltage: {}\n",
+            "SOCKET:\n    name: {}\n    voltage: {:.2}\n",
             self.name,
             self.voltage.get()
         ))
@@ -35,21 +30,23 @@ impl Device for Socket {
         self.name.clone()
     }
     fn poll(&self) {
-        let mut rng = rand::thread_rng();
-
-        self.voltage.set(rng.gen_range(0.0..380.0));
+        self.voltage.set(Self::rand_voltage());
     }
 }
 
 impl Socket {
     fn new(name: &str) -> Self {
-        let mut r = rand::thread_rng();
-        let voltage = r.gen_range(0.0..380.0);
+        let voltage = Self::rand_voltage();
 
         Socket {
             name: name.to_owned(),
             voltage: voltage.into(),
         }
+    }
+
+    fn rand_voltage() -> f64 {
+        let mut r = rand::thread_rng();
+        r.gen_range(0.0..380.0)
     }
 }
 
@@ -73,60 +70,73 @@ impl DeviceStorage<Socket> for SocketStorage {
     }
 }
 
-struct Room {
-    devices: Vec<Rc<dyn Device>>,
-    name: String,
-}
-impl PartialEq for Room {
-    fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
-    }
-}
-
-impl Eq for Room {}
-
-impl Hash for Room {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.name.hash(state)
-    }
-}
-
-impl Room {
-    fn add_device(&mut self, device: Rc<dyn Device>) {
-        self.devices.push(device)
-    }
-}
-
-impl Display for Room {
+#[derive(Debug)]
+struct NoSuchRoom(String);
+impl Display for NoSuchRoom {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("ROOM: {}\n", self.name))
+        f.write_fmt(format_args!("{}", self.0))
+    }
+}
+impl Error for NoSuchRoom {}
+
+#[derive(Debug)]
+struct AlreadyContainsDevice(String);
+impl Display for AlreadyContainsDevice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("{}", self.0))
     }
 }
 
-struct House<'a> {
-    device_by_room: HashMap<&'a Room, Vec<Rc<dyn Device>>>,
+struct House {
+    name: String,
+    device_by_room: HashMap<String, Vec<Rc<dyn Device>>>,
     sockets: SocketStorage,
 }
 
-impl<'a> House<'a> {
-    fn new() -> Self {
+impl House {
+    fn new(name: &str) -> Self {
         House {
+            name: name.to_owned(),
             device_by_room: HashMap::new(),
             sockets: SocketStorage::new(),
         }
     }
 
-    fn add_socket_to_room(&mut self, socket: Rc<Socket>, room: &'a Room) {
-        self.device_by_room.entry(room).or_insert(vec![]);
+    fn rooms(&self) -> Vec<String> {
+        self.device_by_room.keys().cloned().collect()
+    }
+
+    fn devices(&self, room: &str) -> Result<Vec<String>, NoSuchRoom> {
+        let devices = self
+            .device_by_room
+            .get(room)
+            .ok_or(NoSuchRoom(room.to_owned()))?;
+        Ok(devices.iter().map(|device| device.name()).collect())
+    }
+
+    fn add_socket_to_room(
+        &mut self,
+        socket: Rc<Socket>,
+        room: &str,
+    ) -> Result<(), AlreadyContainsDevice> {
+        // let existing_devices = self.devices(room);
+        if let Ok(devices) = self.devices(room) {
+            if devices.contains(&socket.name()) {
+                return Err(AlreadyContainsDevice(socket.name.to_owned()));
+            }
+        }
+
+        self.device_by_room.entry(room.to_owned()).or_insert(vec![]);
         self.device_by_room
             .get_mut(room)
             .unwrap()
             .push(socket.clone());
         self.sockets.add(socket.clone());
+        Ok(())
     }
 
     fn poll(&self) {
-        for (_, devices) in &self.device_by_room {
+        for devices in self.device_by_room.values() {
             for device in devices {
                 device.poll();
             }
@@ -134,11 +144,12 @@ impl<'a> House<'a> {
     }
 }
 
-impl<'a> Display for House<'a> {
+impl Display for House {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("House:\n")?;
+        f.write_fmt(format_args!("House «{}»:\n", self.name))?;
         for (room, devices) in self.device_by_room.iter() {
             room.fmt(f)?;
+            "\n".fmt(f)?;
             for device in devices {
                 device.fmt(f)?;
             }
@@ -148,30 +159,32 @@ impl<'a> Display for House<'a> {
 }
 
 fn main() {
-    println!("Hello, world!");
     let socket = Socket::new("Hello");
     println!("{}", socket);
 
-    let mut sockets = SocketStorage { devices: vec![] };
-    let pointer = Rc::new(socket);
-
-    sockets.add(pointer.clone());
-
-    let mut room = Room {
-        devices: vec![],
-        name: "My Room".to_owned(),
-    };
-    room.add_device(pointer.clone());
-
-    println!("Room: {}", room);
-
-    let mut house = House::new();
-    house.add_socket_to_room(pointer.clone(), &room);
+    let socket1 = Rc::new(socket);
+    let mut house = House::new("The Rising Sun");
+    house
+        .add_socket_to_room(socket1.clone(), "bedroom")
+        .expect("");
 
     println!("The house is: \n{}", house);
     let socket2 = Rc::new(Socket::new("My other socket"));
-    house.add_socket_to_room(socket2, &room);
-    println!("The house NOW is: \n{}", house);
+    house
+        .add_socket_to_room(socket2, "bedroom")
+        .expect("Should add");
+    let socket3 = Rc::new(Socket::new("Hello"));
+    house
+        .add_socket_to_room(socket3, "bedroom")
+        .expect_err("Should get error");
+    println!("The house AFTER ADDING ANOTHER SOCKET is: \n{}", house);
     house.poll();
     println!("The house AFTER POLLING is: \n{}", house);
+    println!("Rooms in the house are: {:?}", house.rooms());
+
+    let devices_in_bedroom = house.devices("bedroom");
+    match devices_in_bedroom {
+        Ok(devices) => println!("Devices in bedroom are {:?}", devices),
+        Err(_) => println!("There's been an error"),
+    }
 }
