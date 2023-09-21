@@ -1,9 +1,9 @@
 use rand::Rng;
 use std::cell::Cell;
 use std::collections::HashMap;
-use std::error::Error;
 use std::fmt::Display;
 use std::rc::Rc;
+use thiserror::Error;
 
 pub trait Device: Display {
     fn name(&self) -> String;
@@ -58,6 +58,12 @@ pub struct SocketStorage {
     devices: Vec<Rc<Socket>>,
 }
 
+impl Default for SocketStorage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SocketStorage {
     pub fn new() -> Self {
         SocketStorage { devices: vec![] }
@@ -70,22 +76,17 @@ impl DeviceStorage<Socket> for SocketStorage {
     }
 }
 
-#[derive(Debug)]
-pub struct NoSuchRoom(String);
-impl Display for NoSuchRoom {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("{}", self.0))
-    }
-}
-impl Error for NoSuchRoom {}
+#[derive(Error, Debug)]
+#[error("~=<{0}>=~")]
+pub struct WhereAmI(String);
 
-#[derive(Debug)]
+#[derive(Error, Debug)]
+#[error("The room {0} does not exist")]
+pub struct NoSuchRoom(#[from] WhereAmI);
+
+#[derive(Error, Debug)]
+#[error("The room already contains this device: {0}")]
 pub struct AlreadyContainsDevice(String);
-impl Display for AlreadyContainsDevice {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("{}", self.0))
-    }
-}
 
 pub struct House {
     pub name: String,
@@ -110,8 +111,8 @@ impl House {
         let devices = self
             .device_by_room
             .get(room)
-            .ok_or(NoSuchRoom(room.to_owned()))?;
-        Ok(devices.keys().into_iter().map(|x| x.clone()).collect())
+            .ok_or(WhereAmI(room.to_owned()))?;
+        Ok(devices.keys().cloned().collect())
     }
 
     pub fn add_socket_to_room(

@@ -25,6 +25,17 @@ fn main() {
     println!("The house AFTER POLLING is: \n{}", house);
     println!("Rooms in the house are: {:?}", house.rooms());
 
+    let socket4 = Rc::new(Socket::new("Hello"));
+    let res = house.add_socket_to_room(socket4, "bedroom");
+    if let Err(e) = res {
+        println!("{}", e);
+    }
+
+    let res = house.devices("No such room");
+    if let Err(e) = res {
+        println!("Composed error: {}", e);
+    }
+
     house.remove_socket_from_room("bedroom", socket3);
     println!("The house AFTER REMOVING socket is: \n{}", house);
 
